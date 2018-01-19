@@ -28,10 +28,16 @@ import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 
 import org.apache.geode.cache.Cache;
+import org.apache.geode.cache.PartitionAttributes;
+import org.apache.geode.cache.PartitionAttributesFactory;
 import org.apache.geode.cache.Region;
+import org.apache.geode.cache.RegionShortcut;
+import org.apache.geode.cache.lucene.internal.LuceneIndexFactoryImpl;
 import org.apache.geode.cache.lucene.internal.LuceneQueryImpl;
+import org.apache.geode.cache.lucene.internal.LuceneServiceImpl;
 import org.apache.geode.cache.lucene.test.LuceneTestUtilities;
 import org.apache.geode.distributed.ConfigurationProperties;
+import org.apache.geode.test.dunit.AsyncInvocation;
 import org.apache.geode.test.dunit.SerializableRunnableIF;
 import org.apache.geode.test.dunit.VM;
 import org.apache.geode.test.junit.categories.DistributedTest;
@@ -98,6 +104,109 @@ public class LuceneQueriesDUnitTest extends LuceneQueriesAccessorBase {
     putDataInRegion(accessor);
     assertTrue(waitForFlushBeforeExecuteTextSearch(accessor, 60000));
     assertTrue(waitForFlushBeforeExecuteTextSearch(dataStore1, 60000));
+    executeTextSearch(accessor);
+  }
+
+  private void destroyIndex() {
+    LuceneService luceneService = LuceneServiceProvider.get(getCache());
+    luceneService.destroyIndex(INDEX_NAME, REGION_NAME);
+  }
+
+  private void recreateIndex() {
+    LuceneService luceneService = LuceneServiceProvider.get(getCache());
+    LuceneIndexFactoryImpl indexFactory =
+        (LuceneIndexFactoryImpl) luceneService.createIndexFactory().addField("text");
+    indexFactory.create(INDEX_NAME, REGION_NAME, true);
+  };
+
+  @Test
+  @Parameters(method = "getListOfRegionTestTypes")
+  public void dropAndRecreateIndex(RegionTestableType regionTestType) throws Exception {
+    SerializableRunnableIF createIndex = () -> {
+      LuceneService luceneService = LuceneServiceProvider.get(getCache());
+      luceneService.createIndexFactory().addField("text").create(INDEX_NAME, REGION_NAME);
+    };
+    dataStore1.invoke(() -> initDataStore(createIndex, regionTestType));
+    dataStore2.invoke(() -> initDataStore(createIndex, regionTestType));
+    accessor.invoke(() -> initAccessor(createIndex, regionTestType));
+
+    putDataInRegion(accessor);
+    assertTrue(waitForFlushBeforeExecuteTextSearch(accessor, 60000));
+    assertTrue(waitForFlushBeforeExecuteTextSearch(dataStore1, 60000));
+    executeTextSearch(accessor);
+
+    dataStore1.invoke(() -> destroyIndex());
+
+    // re-index stored data
+    AsyncInvocation ai1 = dataStore1.invokeAsync(() -> {
+      recreateIndex();
+    });
+
+    // re-index stored data
+    AsyncInvocation ai2 = dataStore2.invokeAsync(() -> {
+      recreateIndex();
+    });
+
+    AsyncInvocation ai3 = accessor.invokeAsync(() -> {
+      recreateIndex();
+    });
+
+    ai1.join();
+    ai2.join();
+    ai3.join();
+
+    ai1.checkException();
+    ai2.checkException();
+    ai3.checkException();
+
+    executeTextSearch(accessor);
+  }
+
+  @Test
+  @Parameters(method = "getListOfRegionTestTypes")
+  public void reindexThenQuery(RegionTestableType regionTestType) throws Exception {
+    SerializableRunnableIF createIndex = () -> {
+      LuceneService luceneService = LuceneServiceProvider.get(getCache());
+      LuceneIndexFactoryImpl indexFactory =
+          (LuceneIndexFactoryImpl) luceneService.createIndexFactory().addField("text");
+      indexFactory.create(INDEX_NAME, REGION_NAME, true);
+    };
+
+    // Create dataRegion prior to index
+    dataStore1.invoke(() -> initDataStore(regionTestType));
+    dataStore2.invoke(() -> initDataStore(regionTestType));
+    accessor.invoke(() -> initAccessor(regionTestType));
+
+    // populate region
+    accessor.invoke(() -> {
+      Region<Object, Object> region = getCache().getRegion(REGION_NAME);
+      region.put(1, new TestObject("hello world"));
+      region.put(113, new TestObject("hi world"));
+      region.put(2, new TestObject("goodbye world"));
+    });
+
+    // re-index stored data
+    AsyncInvocation ai1 = dataStore1.invokeAsync(() -> {
+      recreateIndex();
+    });
+
+    // re-index stored data
+    AsyncInvocation ai2 = dataStore2.invokeAsync(() -> {
+      recreateIndex();
+    });
+
+    AsyncInvocation ai3 = accessor.invokeAsync(() -> {
+      recreateIndex();
+    });
+
+    ai1.join();
+    ai2.join();
+    ai3.join();
+
+    ai1.checkException();
+    ai2.checkException();
+    ai3.checkException();
+
     executeTextSearch(accessor);
   }
 

@@ -529,6 +529,18 @@ public abstract class AbstractGatewaySenderEventProcessor extends Thread {
                 continue;
               }
 
+              if (((GatewaySenderEventImpl) event).isConcurrencyConflict()) {
+                if (isDebugEnabled) {
+                  logger.debug(
+                      "Event with concurrent modification conflict: {} will be removed from Gateway Sender queue: {}",
+                      event, sender);
+                }
+
+                itr.remove();
+                statistics.incEventsNotQueued();
+                continue;
+              }
+
               boolean transmit = filter.beforeTransmit(event);
               if (!transmit) {
                 if (isDebugEnabled) {
